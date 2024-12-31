@@ -1,0 +1,71 @@
+from linebot import LineBotApi, WebhookHandler
+from linebot.models import TextSendMessage, StickerSendMessage, ImageSendMessage, LocationSendMessage
+import requests, json
+
+import openai
+openai.api_key = '---'
+
+from firebase import firebase
+
+token = '---'       
+secret = '---'     
+
+def linebot(request):
+    body = request.get_data(as_text=True)
+    json_data = json.loads(body)
+    try:
+        line_bot_api = LineBotApi(token)
+        handler = WebhookHandler(secret)
+        signature = request.headers['X-Line-Signature']
+        handler.handle(body, signature)
+        tk = json_data['events'][0]['replyToken']
+        timestamp = json_data['events'][0]['timestamp']
+        msg_type = json_data['events'][0]['message']['type']
+        if msg_type == 'text':
+            msg = json_data['events'][0]['message']['text']
+            url = 'https://line-bot-d9d37-default-rtdb.firebaseio.com'
+            fdb = firebase.FirebaseApplication(url, None)
+            chatgpt = fdb.get('/','chatgpt')
+
+            if chatgpt == None:
+                messages = []
+            else:
+                messages = chatgpt
+
+            if msg == '!reset':
+                reply_msg = TextSendMessage(text='對話歷史紀錄已經清空！')
+                line_bot_api.reply_message(tk,reply_msg)
+                fdb.delete('/','chatgpt')
+            elif msg[:4].lower() == "gpt ":
+                messages.append({"role":"user","content":msg[4:]})  
+                response = openai.chat.completions.create(
+                      model="gpt-4o",
+                      max_tokens=800,
+                      temperature=0.5,
+                      messages=messages
+
+                  )
+                ai_msg = response.choices[0].message.content.replace('\n','')  
+                messages.append({"role":"assistant","content":ai_msg})  
+                fdb.put('/','chatgpt',messages)       
+                reply_msg = TextSendMessage(text=ai_msg)    
+            elif msg[:4].lower() == "cgt ":
+                messages.append({"role":"user","content":msg[4:]}) 
+                response = openai.images.generate(
+                        model="dall-e-3",
+                        prompt=msg[4:],
+                        n=1,
+                        quality = 'standard',
+                        size="1024x1024")
+                ai_msg = response.data[0].url
+               
+                reply_msg = TextSendMessage(text=ai_msg)    
+            line_bot_api.reply_message(tk,reply_msg)
+        else:
+            reply_msg = TextSendMessage(text='你傳的不是文字訊息')
+
+
+    except Exception as e:
+        detail = e.args[0]
+        print(detail)
+    return 'OK'
